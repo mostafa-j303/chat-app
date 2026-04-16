@@ -21,6 +21,7 @@ Example future entries:
 - `react/`
 - `nextjs/`
 - `framer-motion/`
+- `anthropic-managed-agents/`
 - `ui-ux-pro-max-design-intelligence/`
 - `ui-design/`
 - `prompt-engineering.md`
