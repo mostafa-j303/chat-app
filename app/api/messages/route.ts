@@ -6,7 +6,7 @@ export async function GET(request: NextRequest) {
   try {
     const pool = connectToDatabase();
     const result = await pool.query(
-      'SELECT id, sender, content, timestamp FROM messages ORDER BY timestamp ASC'
+      'SELECT id, sender, content, timestamp FROM chat_messages ORDER BY timestamp ASC'
     );
     
     return NextResponse.json(result.rows);
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
 
     const pool = connectToDatabase();
     const result = await pool.query(
-      'INSERT INTO messages (sender, content, timestamp) VALUES ($1, $2, NOW()) RETURNING id, sender, content, timestamp',
+      'INSERT INTO chat_messages (sender, content, timestamp) VALUES ($1, $2, NOW()) RETURNING id, sender, content, timestamp',
       [sender, content]
     );
 

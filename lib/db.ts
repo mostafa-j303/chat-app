@@ -7,7 +7,7 @@ export function connectToDatabase() {
   if (!pool) {
     pool = new Pool({
       connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false }, // Render requires SSL
+      ssl: { rejectUnauthorized: false }, // Required for Render
     });
   }
 
