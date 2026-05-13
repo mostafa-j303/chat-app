@@ -4,179 +4,72 @@ import { signOut } from "firebase/auth";
 import { AnimatePresence, motion } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { useAuthUser } from "@/hooks/useAuthUser";
+import {
+  MESSAGE_STREAK_LIMIT,
+  ensureDirectChat,
+  markChatRead,
+  sendDirectMessage,
+  setCurrentUserOffline,
+  setCurrentUserOnline,
+  subscribeChatMessages,
+  subscribeOnlineUsers,
+  subscribeUserChats,
+  type ChatMessage,
+  type ChatSummary,
+  type UserProfile,
+} from "@/lib/firebase/chat";
 import { getFirebaseAuth } from "@/lib/firebase/config.js";
+import { countryCodeToFlag, getCountryCodeFromLocationCookie } from "@/lib/location/country";
+import { useAuthUser } from "@/hooks/useAuthUser";
 
-type Gender = "Female" | "Male" | "Non-binary";
+function getFriendlyError(error: unknown) {
+  if (error instanceof Error && error.message === "MESSAGE_LIMIT_REACHED") {
+    return "You sent two messages. Wait for the other person to reply.";
+  }
 
-type OnlineUser = {
-  id: string;
-  name: string;
-  age: number;
-  gender: Gender;
-  locationCookie: string;
-  unread: number;
-  accent: string;
-};
+  if (error instanceof Error) {
+    return error.message;
+  }
 
-type ChatMessage = {
-  id: string;
-  sender: "me" | "them";
-  text: string;
-  time: string;
-};
-
-const onlineUsers: OnlineUser[] = [
-  {
-    id: "maya",
-    name: "Maya",
-    age: 27,
-    gender: "Female",
-    locationCookie: "countryCode=LB",
-    unread: 3,
-    accent: "bg-teal-300",
-  },
-  {
-    id: "omar",
-    name: "Omar",
-    age: 31,
-    gender: "Male",
-    locationCookie: "location=%7B%22countryCode%22%3A%22AE%22%7D",
-    unread: 0,
-    accent: "bg-amber-300",
-  },
-  {
-    id: "lina",
-    name: "Lina",
-    age: 24,
-    gender: "Female",
-    locationCookie: "cf-ipcountry=FR",
-    unread: 8,
-    accent: "bg-rose-300",
-  },
-  {
-    id: "sam",
-    name: "Sam",
-    age: 29,
-    gender: "Non-binary",
-    locationCookie: "country=CA",
-    unread: 1,
-    accent: "bg-cyan-300",
-  },
-];
-
-const initialConversations: Record<string, ChatMessage[]> = {
-  maya: [
-    { id: "maya-1", sender: "them", text: "Hey, are you online for a quick chat?", time: "09:41" },
-    { id: "maya-2", sender: "them", text: "I saved the room for us.", time: "09:42" },
-    { id: "maya-3", sender: "me", text: "Yes, I am here now.", time: "09:44" },
-  ],
-  omar: [
-    { id: "omar-1", sender: "them", text: "The dashboard looks much cleaner today.", time: "08:15" },
-    { id: "omar-2", sender: "me", text: "Good. I am polishing the chat list next.", time: "08:17" },
-  ],
-  lina: [
-    { id: "lina-1", sender: "them", text: "I sent you the notes.", time: "11:02" },
-    { id: "lina-2", sender: "them", text: "Can you check the last two points?", time: "11:04" },
-  ],
-  sam: [{ id: "sam-1", sender: "them", text: "Ping me when you are free.", time: "12:20" }],
-};
-
-const countryNames: Record<string, string> = {
-  lebanon: "LB",
-  "united arab emirates": "AE",
-  emirates: "AE",
-  france: "FR",
-  canada: "CA",
-  "united states": "US",
-  usa: "US",
-  "united kingdom": "GB",
-  uk: "GB",
-};
-
-function parseCookies(cookieString: string) {
-  return cookieString
-    .split(";")
-    .map((cookie) => cookie.trim())
-    .filter(Boolean)
-    .reduce<Record<string, string>>((cookies, cookie) => {
-      const [key, ...valueParts] = cookie.split("=");
-      cookies[key] = valueParts.join("=");
-      return cookies;
-    }, {});
+  return "Something went wrong while loading chat.";
 }
 
-function normalizeCountryCode(value: string | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-
-  const decodedValue = decodeURIComponent(value).trim();
-
-  if (/^[a-z]{2}$/i.test(decodedValue)) {
-    return decodedValue.toUpperCase();
-  }
-
-  const mappedCountry = countryNames[decodedValue.toLowerCase()];
-
-  if (mappedCountry) {
-    return mappedCountry;
-  }
-
-  try {
-    const parsedValue = JSON.parse(decodedValue) as Record<string, unknown>;
-    const nestedValue =
-      parsedValue.countryCode ||
-      parsedValue.country_code ||
-      parsedValue.country ||
-      parsedValue.countryName ||
-      parsedValue.country_name;
-
-    return typeof nestedValue === "string" ? normalizeCountryCode(nestedValue) : null;
-  } catch {
-    return null;
-  }
+function formatAge(age: UserProfile["age"]) {
+  return typeof age === "number" && Number.isFinite(age) ? `${age} years old` : "Age not set";
 }
 
-function getCountryCodeFromLocationCookie(cookieString: string) {
-  const cookies = parseCookies(cookieString);
-  const directKeys = ["countryCode", "country_code", "country", "geo_country", "location_country", "cf-ipcountry"];
-
-  for (const key of directKeys) {
-    const code = normalizeCountryCode(cookies[key]);
-
-    if (code) {
-      return code;
-    }
-  }
-
-  for (const value of Object.values(cookies)) {
-    const code = normalizeCountryCode(value);
-
-    if (code) {
-      return code;
-    }
-  }
-
-  return null;
+function formatGender(gender: UserProfile["gender"]) {
+  return gender && gender !== "not_provided" ? gender.replaceAll("_", " ") : "Gender not set";
 }
 
-function countryCodeToFlag(countryCode: string | null) {
-  if (!countryCode || !/^[A-Z]{2}$/.test(countryCode)) {
-    return "??";
-  }
-
-  return countryCode
-    .split("")
-    .map((character) => String.fromCodePoint(127397 + character.charCodeAt(0)))
-    .join("");
+function getProfileName(profile: UserProfile) {
+  return profile.username || profile.displayName || profile.email?.split("@")[0] || `User_${profile.uid.slice(0, 5)}`;
 }
 
-function countMyMessagesWaiting(messages: ChatMessage[]) {
+function getInitial(profile: UserProfile) {
+  return getProfileName(profile).slice(0, 1).toUpperCase();
+}
+
+function formatMessageTime(message: ChatMessage) {
+  if (!message.createdAt) {
+    return "Sending";
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(message.createdAt.toDate());
+}
+
+function countMyWaitingMessages(messages: ChatMessage[], uid: string | undefined) {
+  if (!uid) {
+    return 0;
+  }
+
   let count = 0;
 
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].sender !== "me") {
+    if (messages[index].senderId !== uid) {
       break;
     }
 
@@ -189,11 +82,15 @@ function countMyMessagesWaiting(messages: ChatMessage[]) {
 export function ChatDashboard() {
   const router = useRouter();
   const { user, loading } = useAuthUser();
-  const [selectedUserId, setSelectedUserId] = useState(onlineUsers[0].id);
-  const [users, setUsers] = useState(onlineUsers);
-  const [conversations, setConversations] = useState(initialConversations);
+  const [onlineUsers, setOnlineUsers] = useState<UserProfile[]>([]);
+  const [chatSummaries, setChatSummaries] = useState<ChatSummary[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [activeMessages, setActiveMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
-  const [browserLocationCookie, setBrowserLocationCookie] = useState("");
+  const [dashboardError, setDashboardError] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -202,10 +99,174 @@ export function ChatDashboard() {
   }, [loading, router, user]);
 
   useEffect(() => {
-    setBrowserLocationCookie(document.cookie);
-  }, []);
+    if (!user) {
+      return undefined;
+    }
+
+    const currentUser = user;
+    const countryCode = getCountryCodeFromLocationCookie(document.cookie);
+
+    function touchPresence() {
+      setCurrentUserOnline(currentUser, countryCode).catch((error: unknown) => {
+        setDashboardError(getFriendlyError(error));
+      });
+    }
+
+    touchPresence();
+    const heartbeat = window.setInterval(touchPresence, 25000);
+    const markOffline = () => {
+      setCurrentUserOffline(currentUser.uid).catch(() => undefined);
+    };
+
+    window.addEventListener("beforeunload", markOffline);
+
+    return () => {
+      window.clearInterval(heartbeat);
+      window.removeEventListener("beforeunload", markOffline);
+      markOffline();
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      return undefined;
+    }
+
+    try {
+      const unsubscribeUsers = subscribeOnlineUsers(user.uid, setOnlineUsers, setDashboardError);
+      const unsubscribeChats = subscribeUserChats(user.uid, setChatSummaries, setDashboardError);
+
+      return () => {
+        unsubscribeUsers();
+        unsubscribeChats();
+      };
+    } catch (error) {
+      setDashboardError(getFriendlyError(error));
+      return undefined;
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!onlineUsers.length) {
+      setSelectedUserId(null);
+      return;
+    }
+
+    const selectedUserStillOnline = onlineUsers.some((onlineUser) => onlineUser.uid === selectedUserId);
+
+    if (!selectedUserId || !selectedUserStillOnline) {
+      setSelectedUserId(onlineUsers[0].uid);
+    }
+  }, [onlineUsers, selectedUserId]);
+
+  const unreadByUserId = useMemo(() => {
+    if (!user) {
+      return {};
+    }
+
+    return chatSummaries.reduce<Record<string, number>>((unreadMap, chat) => {
+      const otherUserId = chat.participants.find((participantId) => participantId !== user.uid);
+
+      if (otherUserId) {
+        unreadMap[otherUserId] = chat.unreadCounts?.[user.uid] || 0;
+      }
+
+      return unreadMap;
+    }, {});
+  }, [chatSummaries, user]);
+
+  const sortedOnlineUsers = useMemo(
+    () =>
+      [...onlineUsers].sort((firstUser, secondUser) => {
+        const unreadDifference = (unreadByUserId[secondUser.uid] || 0) - (unreadByUserId[firstUser.uid] || 0);
+
+        if (unreadDifference) {
+          return unreadDifference;
+        }
+
+        return getProfileName(firstUser).localeCompare(getProfileName(secondUser));
+      }),
+    [onlineUsers, unreadByUserId],
+  );
+
+  const activeUser = useMemo(
+    () => onlineUsers.find((onlineUser) => onlineUser.uid === selectedUserId) || null,
+    [onlineUsers, selectedUserId],
+  );
+
+  const activeChat = useMemo(
+    () => chatSummaries.find((chat) => chat.id === activeChatId) || null,
+    [activeChatId, chatSummaries],
+  );
+
+  const displayName = user?.displayName || (user?.isAnonymous ? "Guest user" : user?.email?.split("@")[0]) || "Chat user";
+  const totalUnread = Object.values(unreadByUserId).reduce((total, unread) => total + unread, 0);
+  const currentWaitingCount =
+    user && activeChat
+      ? activeChat.waitingStreak?.[user.uid] || 0
+      : countMyWaitingMessages(activeMessages, user?.uid);
+  const remainingMessageCount = Math.max(0, MESSAGE_STREAK_LIMIT - currentWaitingCount);
+  const canSend = Boolean(activeUser && activeChatId && remainingMessageCount > 0 && !sending);
+
+  useEffect(() => {
+    if (!user || !activeUser) {
+      setActiveChatId(null);
+      setActiveMessages([]);
+      return undefined;
+    }
+
+    let canceled = false;
+    setChatLoading(true);
+    setDashboardError("");
+
+    ensureDirectChat(user, activeUser)
+      .then((chatId) => {
+        if (canceled) {
+          return;
+        }
+
+        setActiveChatId(chatId);
+        return markChatRead(chatId, user.uid);
+      })
+      .catch((error: unknown) => setDashboardError(getFriendlyError(error)))
+      .finally(() => {
+        if (!canceled) {
+          setChatLoading(false);
+        }
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [activeUser, user]);
+
+  useEffect(() => {
+    if (!activeChatId) {
+      setActiveMessages([]);
+      return undefined;
+    }
+
+    try {
+      return subscribeChatMessages(activeChatId, setActiveMessages, setDashboardError);
+    } catch (error) {
+      setDashboardError(getFriendlyError(error));
+      return undefined;
+    }
+  }, [activeChatId]);
+
+  useEffect(() => {
+    if (!activeChatId || !user || !activeMessages.length) {
+      return;
+    }
+
+    markChatRead(activeChatId, user.uid).catch((error: unknown) => setDashboardError(getFriendlyError(error)));
+  }, [activeChatId, activeMessages.length, user]);
 
   async function handleSignOut() {
+    if (user) {
+      await setCurrentUserOffline(user.uid).catch(() => undefined);
+    }
+
     const auth = getFirebaseAuth();
 
     if (auth) {
@@ -218,50 +279,33 @@ export function ChatDashboard() {
   function handleSelectUser(userId: string) {
     setSelectedUserId(userId);
     setDraft("");
-    setUsers((currentUsers) =>
-      currentUsers.map((onlineUser) => (onlineUser.id === userId ? { ...onlineUser, unread: 0 } : onlineUser)),
-    );
+    setDashboardError("");
   }
 
-  function handleSendMessage(event: FormEvent<HTMLFormElement>) {
+  async function handleSendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!activeUser || !canSend || !draft.trim()) {
+    if (!user || !activeUser || !activeChatId || !draft.trim() || !canSend) {
       return;
     }
 
-    const message: ChatMessage = {
-      id: `${activeUser.id}-${Date.now()}`,
-      sender: "me",
-      text: draft.trim(),
-      time: new Intl.DateTimeFormat("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-      }).format(new Date()),
-    };
+    setSending(true);
+    setDashboardError("");
 
-    setConversations((currentConversations) => ({
-      ...currentConversations,
-      [activeUser.id]: [...(currentConversations[activeUser.id] || []), message],
-    }));
-    setDraft("");
+    try {
+      await sendDirectMessage({
+        chatId: activeChatId,
+        senderId: user.uid,
+        recipientId: activeUser.uid,
+        text: draft.trim(),
+      });
+      setDraft("");
+    } catch (error) {
+      setDashboardError(getFriendlyError(error));
+    } finally {
+      setSending(false);
+    }
   }
-
-  const sortedUsers = useMemo(
-    () => [...users].sort((firstUser, secondUser) => secondUser.unread - firstUser.unread),
-    [users],
-  );
-  const displayName = user?.displayName || (user?.isAnonymous ? "Guest user" : user?.email?.split("@")[0]) || "Chat user";
-  const activeUser = users.find((onlineUser) => onlineUser.id === selectedUserId);
-  const activeMessages = activeUser ? conversations[activeUser.id] || [] : [];
-  const waitingMessageCount = countMyMessagesWaiting(activeMessages);
-  const canSend = waitingMessageCount < 2;
-  const remainingMessageCount = Math.max(0, 2 - waitingMessageCount);
-  const totalUnread = users.reduce((total, onlineUser) => total + onlineUser.unread, 0);
-  const viewerFlag = countryCodeToFlag(getCountryCodeFromLocationCookie(browserLocationCookie));
-  const selectedCountryCode = activeUser
-    ? getCountryCodeFromLocationCookie(activeUser.locationCookie || browserLocationCookie)
-    : null;
 
   if (loading || !user) {
     return (
@@ -288,7 +332,7 @@ export function ChatDashboard() {
             <p className="text-sm font-semibold text-teal-200">Pulse Chat dashboard</p>
             <h1 className="mt-1 text-2xl font-black">Hello, {displayName}</h1>
             <p className="mt-2 text-sm font-semibold text-neutral-300">
-              {viewerFlag} {totalUnread ? `${totalUnread} unread messages` : "No unread messages"}
+              {totalUnread ? `${totalUnread} unread messages` : "No unread messages"}
             </p>
           </div>
           <button
@@ -306,61 +350,79 @@ export function ChatDashboard() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold text-teal-100">Online users</p>
-                  <p className="mt-2 text-3xl font-black">{users.length}</p>
+                  <p className="mt-2 text-3xl font-black">{onlineUsers.length}</p>
                 </div>
                 <span className="rounded-[8px] bg-white px-3 py-2 text-sm font-black text-neutral-950">Live</span>
               </div>
             </div>
 
-            <div className="grid max-h-[calc(100vh-230px)] gap-3 overflow-y-auto pr-1">
-              {sortedUsers.map((onlineUser) => {
-                const countryCode = getCountryCodeFromLocationCookie(onlineUser.locationCookie || browserLocationCookie);
-                const isSelected = onlineUser.id === selectedUserId;
+            {dashboardError ? (
+              <p className="mb-4 rounded-[8px] border border-red-300/30 bg-red-500/15 px-4 py-3 text-sm font-bold text-red-100">
+                {dashboardError}
+              </p>
+            ) : null}
 
-                return (
-                  <motion.button
-                    key={onlineUser.id}
-                    type="button"
-                    aria-pressed={isSelected}
-                    onClick={() => handleSelectUser(onlineUser.id)}
-                    className={`relative grid min-h-[96px] grid-cols-[52px_1fr] gap-3 rounded-[8px] border p-3 text-left transition ${
-                      isSelected
-                        ? "border-teal-300 bg-teal-300/15"
-                        : "border-white/10 bg-neutral-950/60 hover:border-white/25"
-                    }`}
-                    whileHover={{ y: -2, rotateX: 2, rotateY: -1 }}
-                    whileTap={{ scale: 0.99 }}
-                    style={{ transformPerspective: 900 }}
-                  >
-                    <span
-                      className={`grid h-12 w-12 place-items-center rounded-[8px] ${onlineUser.accent} text-lg font-black text-neutral-950`}
+            {sortedOnlineUsers.length ? (
+              <div className="grid max-h-[calc(100vh-260px)] gap-3 overflow-y-auto pr-1">
+                {sortedOnlineUsers.map((onlineUser) => {
+                  const unreadCount = unreadByUserId[onlineUser.uid] || 0;
+                  const isSelected = onlineUser.uid === selectedUserId;
+                  const flag = countryCodeToFlag(onlineUser.countryCode);
+
+                  return (
+                    <motion.button
+                      key={onlineUser.uid}
+                      type="button"
+                      aria-pressed={isSelected}
+                      onClick={() => handleSelectUser(onlineUser.uid)}
+                      className={`relative grid min-h-[100px] grid-cols-[52px_1fr] gap-3 rounded-[8px] border p-3 text-left transition ${
+                        isSelected
+                          ? "border-teal-300 bg-teal-300/15"
+                          : "border-white/10 bg-neutral-950/60 hover:border-white/25"
+                      }`}
+                      whileHover={{ y: -2, rotateX: 2, rotateY: -1 }}
+                      whileTap={{ scale: 0.99 }}
+                      style={{ transformPerspective: 900 }}
                     >
-                      {onlineUser.name.slice(0, 1)}
-                    </span>
+                      <span className="grid h-12 w-12 place-items-center rounded-[8px] bg-teal-300 text-lg font-black text-neutral-950">
+                        {getInitial(onlineUser)}
+                      </span>
 
-                    <span className="min-w-0">
-                      <span className="flex items-start justify-between gap-3">
-                        <span className="min-w-0">
-                          <span className="block truncate text-base font-black text-white">{onlineUser.name}</span>
-                          <span className="mt-1 block text-sm font-semibold text-neutral-300">
-                            {countryCodeToFlag(countryCode)} {onlineUser.age} years old
+                      <span className="min-w-0">
+                        <span className="flex items-start justify-between gap-3">
+                          <span className="min-w-0">
+                            <span className="block truncate text-base font-black text-white">
+                              {getProfileName(onlineUser)}
+                            </span>
+                            <span className="mt-1 block text-sm font-semibold text-neutral-300">
+                              {flag} {formatAge(onlineUser.age)}
+                            </span>
                           </span>
+                          <span className="h-3 w-3 shrink-0 rounded-full bg-emerald-300 shadow-[0_0_18px_rgba(110,231,183,0.9)]" />
                         </span>
-                        <span className="h-3 w-3 rounded-full bg-emerald-300 shadow-[0_0_18px_rgba(110,231,183,0.9)]" />
+
+                        <span className="mt-2 block text-sm font-semibold capitalize text-neutral-400">
+                          {formatGender(onlineUser.gender)}
+                        </span>
                       </span>
 
-                      <span className="mt-2 block text-sm font-semibold text-neutral-400">{onlineUser.gender}</span>
-                    </span>
-
-                    {onlineUser.unread ? (
-                      <span className="absolute right-10 top-3 grid min-h-7 min-w-7 place-items-center rounded-full bg-red-500 px-2 text-sm font-black text-white shadow-[0_0_22px_rgba(239,68,68,0.75)]">
-                        {onlineUser.unread}
-                      </span>
-                    ) : null}
-                  </motion.button>
-                );
-              })}
-            </div>
+                      {unreadCount ? (
+                        <span className="absolute right-3 top-3 grid min-h-7 min-w-7 place-items-center rounded-full bg-red-500 px-2 text-sm font-black text-white shadow-[0_0_22px_rgba(239,68,68,0.75)]">
+                          {unreadCount}
+                        </span>
+                      ) : null}
+                    </motion.button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded-[8px] border border-white/10 bg-neutral-950/60 p-5 text-center">
+                <p className="text-lg font-black">No one else is online</p>
+                <p className="mt-2 text-sm leading-6 text-neutral-400">
+                  Open the app with another Firebase user to start a real one-on-one chat.
+                </p>
+              </div>
+            )}
           </aside>
 
           <section className="flex min-h-[560px] min-w-0 flex-col">
@@ -368,28 +430,44 @@ export function ChatDashboard() {
               <>
                 <div className="flex flex-col gap-4 border-b border-white/10 p-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex min-w-0 items-center gap-3">
-                    <span
-                      className={`grid h-14 w-14 shrink-0 place-items-center rounded-[8px] ${activeUser.accent} text-xl font-black text-neutral-950`}
-                    >
-                      {activeUser.name.slice(0, 1)}
+                    <span className="grid h-14 w-14 shrink-0 place-items-center rounded-[8px] bg-teal-300 text-xl font-black text-neutral-950">
+                      {getInitial(activeUser)}
                     </span>
                     <div className="min-w-0">
-                      <h2 className="truncate text-2xl font-black">{activeUser.name}</h2>
-                      <p className="mt-1 text-sm font-semibold text-neutral-300">
-                        {countryCodeToFlag(selectedCountryCode)} {activeUser.age} years old · {activeUser.gender}
+                      <h2 className="truncate text-2xl font-black">{getProfileName(activeUser)}</h2>
+                      <p className="mt-1 text-sm font-semibold capitalize text-neutral-300">
+                        {countryCodeToFlag(activeUser.countryCode)} {formatAge(activeUser.age)} ·{" "}
+                        {formatGender(activeUser.gender)}
                       </p>
                     </div>
                   </div>
 
                   <div className="rounded-[8px] border border-white/10 bg-neutral-950/60 px-4 py-3 text-sm font-black">
-                    {canSend ? `${remainingMessageCount} message${remainingMessageCount === 1 ? "" : "s"} available` : `Waiting for ${activeUser.name}`}
+                    {remainingMessageCount
+                      ? `${remainingMessageCount} message${remainingMessageCount === 1 ? "" : "s"} available`
+                      : `Waiting for ${getProfileName(activeUser)}`}
                   </div>
                 </div>
 
                 <div className="flex-1 space-y-4 overflow-y-auto p-4">
+                  {chatLoading ? (
+                    <p className="rounded-[8px] border border-white/10 bg-white/10 px-4 py-3 text-sm font-bold">
+                      Opening chat...
+                    </p>
+                  ) : null}
+
+                  {!chatLoading && !activeMessages.length ? (
+                    <div className="grid h-full min-h-[300px] place-items-center rounded-[8px] border border-white/10 bg-neutral-950/40 p-5 text-center">
+                      <div>
+                        <p className="text-xl font-black">No messages yet</p>
+                        <p className="mt-2 text-sm text-neutral-400">Start the conversation with {getProfileName(activeUser)}.</p>
+                      </div>
+                    </div>
+                  ) : null}
+
                   <AnimatePresence mode="popLayout">
-                    {activeMessages.map((message, index) => {
-                      const isMine = message.sender === "me";
+                    {activeMessages.map((message) => {
+                      const isMine = message.senderId === user.uid;
 
                       return (
                         <motion.article
@@ -400,11 +478,10 @@ export function ChatDashboard() {
                           initial={{ opacity: 0, y: 18, scale: 0.98 }}
                           animate={{ opacity: 1, y: 0, scale: 1 }}
                           exit={{ opacity: 0, y: -8 }}
-                          transition={{ delay: index * 0.03 }}
                         >
                           <div className="flex items-center justify-between gap-4">
-                            <p className="text-sm font-black">{isMine ? "You" : activeUser.name}</p>
-                            <p className="text-xs font-bold opacity-70">{message.time}</p>
+                            <p className="text-sm font-black">{isMine ? "You" : getProfileName(activeUser)}</p>
+                            <p className="text-xs font-bold opacity-70">{formatMessageTime(message)}</p>
                           </div>
                           <p className="mt-2 leading-6">{message.text}</p>
                         </motion.article>
@@ -414,16 +491,16 @@ export function ChatDashboard() {
                 </div>
 
                 <form className="border-t border-white/10 p-4" onSubmit={handleSendMessage}>
-                  {!canSend ? (
+                  {!remainingMessageCount ? (
                     <p className="mb-3 rounded-[8px] border border-red-300/30 bg-red-500/15 px-4 py-3 text-sm font-bold text-red-100">
-                      You sent two messages. {activeUser.name} needs to reply before you can send another one.
+                      You sent two messages. {getProfileName(activeUser)} needs to reply before you can send another one.
                     </p>
                   ) : null}
 
                   <div className="flex gap-3">
                     <input
                       className="min-h-12 min-w-0 flex-1 rounded-[8px] border border-white/10 bg-neutral-950/70 px-4 text-white outline-none placeholder:text-neutral-500 focus:border-teal-300 disabled:cursor-not-allowed disabled:opacity-60"
-                      placeholder={`Message ${activeUser.name}`}
+                      placeholder={`Message ${getProfileName(activeUser)}`}
                       type="text"
                       value={draft}
                       onChange={(event) => setDraft(event.target.value)}
@@ -437,12 +514,22 @@ export function ChatDashboard() {
                       whileTap={{ scale: 0.98 }}
                       style={{ transformPerspective: 900 }}
                     >
-                      Send
+                      {sending ? "Sending" : "Send"}
                     </motion.button>
                   </div>
                 </form>
               </>
-            ) : null}
+            ) : (
+              <div className="grid min-h-[560px] place-items-center p-5 text-center">
+                <div>
+                  <p className="text-2xl font-black">Waiting for online users</p>
+                  <p className="mt-2 max-w-md text-sm leading-6 text-neutral-400">
+                    The roster is connected to Firestore now. When another authenticated user opens the dashboard,
+                    they will appear here.
+                  </p>
+                </div>
+              </div>
+            )}
           </section>
         </div>
       </motion.section>
