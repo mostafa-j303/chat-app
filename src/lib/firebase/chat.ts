@@ -2,7 +2,6 @@ import type { User } from "firebase/auth";
 import {
   collection,
   doc,
-  getDoc,
   increment,
   onSnapshot,
   orderBy,
@@ -142,30 +141,19 @@ export async function ensureDirectChat(currentUser: User, otherUser: UserProfile
   const db = requireDb();
   const chatId = buildDirectChatId(currentUser.uid, otherUser.uid);
   const chatRef = doc(db, "chats", chatId);
-  const existingChat = await getDoc(chatRef);
 
-  if (!existingChat.exists()) {
-    await setDoc(chatRef, {
+  await setDoc(
+    chatRef,
+    {
       type: "direct",
       participants: [currentUser.uid, otherUser.uid],
       participantNames: {
         [currentUser.uid]: currentUser.displayName || currentUser.email?.split("@")[0] || "Me",
         [otherUser.uid]: getProfileName(otherUser),
       },
-      unreadCounts: {
-        [currentUser.uid]: 0,
-        [otherUser.uid]: 0,
-      },
-      waitingStreak: {
-        [currentUser.uid]: 0,
-        [otherUser.uid]: 0,
-      },
-      lastMessage: null,
-      lastMessageAt: null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  }
+    },
+    { merge: true },
+  );
 
   return chatId;
 }

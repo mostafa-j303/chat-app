@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   MESSAGE_STREAK_LIMIT,
+  buildDirectChatId,
   ensureDirectChat,
   markChatRead,
   sendDirectMessage,
@@ -206,7 +207,9 @@ export function ChatDashboard() {
       ? activeChat.waitingStreak?.[user.uid] || 0
       : countMyWaitingMessages(activeMessages, user?.uid);
   const remainingMessageCount = Math.max(0, MESSAGE_STREAK_LIMIT - currentWaitingCount);
-  const canSend = Boolean(activeUser && activeChatId && remainingMessageCount > 0 && !sending);
+  const directChatId = user && activeUser ? buildDirectChatId(user.uid, activeUser.uid) : null;
+  const canSend = Boolean(activeUser && remainingMessageCount > 0 && directChatId && !sending);
+  const canType = Boolean(activeUser && remainingMessageCount > 0 && !sending);
 
   useEffect(() => {
     if (!user || !activeUser) {
@@ -285,7 +288,13 @@ export function ChatDashboard() {
   async function handleSendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!user || !activeUser || !activeChatId || !draft.trim() || !canSend) {
+    if (!user || !activeUser || !draft.trim() || !canSend) {
+      return;
+    }
+
+    const chatId = activeChatId ?? directChatId;
+
+    if (!chatId) {
       return;
     }
 
@@ -293,15 +302,19 @@ export function ChatDashboard() {
     setDashboardError("");
 
     try {
+      const resolvedChatId = await ensureDirectChat(user, activeUser);
+      setActiveChatId(resolvedChatId);
       await sendDirectMessage({
-        chatId: activeChatId,
+        chatId: resolvedChatId,
         senderId: user.uid,
         recipientId: activeUser.uid,
         text: draft.trim(),
       });
       setDraft("");
     } catch (error) {
-      setDashboardError(getFriendlyError(error));
+      const message = getFriendlyError(error);
+      setDashboardError(message);
+      console.error("Chat send error:", error);
     } finally {
       setSending(false);
     }
