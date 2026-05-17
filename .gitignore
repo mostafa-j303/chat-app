@@ -1,5 +1,6 @@
 node_modules
 .next
+.firebase
 out
 .env
 .env.local

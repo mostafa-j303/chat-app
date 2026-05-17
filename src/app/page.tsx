@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { LoginPanel } from "@/components/LoginPanel";
 
 export default function Home() {
-  redirect("/login");
+  return <LoginPanel />;
 }
