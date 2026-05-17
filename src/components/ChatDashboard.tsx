@@ -420,7 +420,7 @@ export function ChatDashboard() {
                       </span>
 
                       {unreadCount ? (
-                        <span className="absolute right-10 top-3 grid min-h-7 min-w-7 place-items-center rounded-full bg-red-500 px-2 text-sm font-black text-white shadow-[0_0_22px_rgba(239,68,68,0.75)]">
+                        <span className="absolute right-8 top-3 grid min-h-7 min-w-7 place-items-center rounded-full bg-red-500 px-2 text-sm font-black text-white shadow-[0_0_22px_rgba(239,68,68,0.75)]">
                           {unreadCount}
                         </span>
                       ) : null}
